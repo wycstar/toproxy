@@ -1,6 +1,10 @@
 #coding:utf-8
 #!/usr/bin/env python
 
+'''
+代理访问，利用tornado的异步特性
+'''
+
 import logging
 import os
 import re
@@ -25,7 +29,7 @@ class ProxyHandler(tornado.web.RequestHandler):
         logger.debug('Handle %s request to %s', self.request.method,self.request.uri)
 
         def handle_response(response):
-            #self.request.headers.get("X-Real-Ip",'')
+            # response产生错误，但不属于tornado.httpclient.HTTPError，置500错误
             if (response.error and not
                     isinstance(response.error, tornado.httpclient.HTTPError)):
                 self.set_status(500)
@@ -53,13 +57,15 @@ class ProxyHandler(tornado.web.RequestHandler):
                 self.finish()
                 return
 
+        # 判断是否是apacheBech攻击 
         user_agent = self.request.headers.get('User-Agent', '')
         if shield_attack(user_agent):
             self.set_status(500)
-            self.write('nima')
+            self.write('请勿使用性能测试软件访问此站!')
             self.finish()
             return
 
+        # 判断是否是在白名单内
         client_ip = self.request.remote_ip
         if not match_white_iplist(client_ip):
             logger.debug('deny %s', client_ip)
@@ -71,12 +77,14 @@ class ProxyHandler(tornado.web.RequestHandler):
         if not body:
             body = None
         try:
+            # 获取html内容
             fetch_request(
                 self.request.uri, handle_response,
                 method=self.request.method, body=body,
                 headers=self.request.headers, follow_redirects=False,
                 allow_nonstandard_methods=True)
         except tornado.httpclient.HTTPError as e:
+            # 这句还没弄懂啥意思
             if hasattr(e, 'response') and e.response:
                 handle_response(e.response)
             else:
@@ -187,17 +195,18 @@ def fetch_request(url, callback, **kwargs):
     proxy = get_proxy(url)
     if proxy:
         logger.debug('Forward request via upstream proxy %s', proxy)
+        # 如果选择用代理访问需要设置为curl client，curl模式速度更快
         tornado.httpclient.AsyncHTTPClient.configure(
             'tornado.curl_httpclient.CurlAsyncHTTPClient')
+        # 将代理的密码和用户名以key-value形式添加
         host, port = parse_proxy(proxy)
         kwargs['proxy_host'] = host
         kwargs['proxy_port'] = port
 
+    # tornado自带的异步http client，kwargs带有request的参数，回调函数会在访问成功后执行
     req = tornado.httpclient.HTTPRequest(url, **kwargs)
     client = tornado.httpclient.AsyncHTTPClient()
     client.fetch(req, callback,follow_redirects=True,max_redirects=3)
-
-
 
 def run_proxy(port, start_ioloop=True):
     app = tornado.web.Application([
